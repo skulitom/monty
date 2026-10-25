@@ -83,7 +83,7 @@ impl<'i> CompileInterns<'i> {
             StringId::from_ascii(text.as_bytes()[0])
         } else if let Some(id) = self.pending.as_ref().and_then(|pending| pending.string_ids.get(text)) {
             *id
-        } else if let Ok(tag) = text.parse::<StaticStrings>() {
+        } else if let Some(tag) = StaticStrings::from_text(text) {
             self.intern_static(tag)
         } else {
             let existing = self.base.string_id_by_name.borrow().get(text).copied();
@@ -184,7 +184,7 @@ impl<'i> CompileInterns<'i> {
             Some(StringId::from_ascii(text.as_bytes()[0]))
         } else if let Some(id) = self.pending.as_ref().and_then(|pending| pending.string_ids.get(text)) {
             Some(*id)
-        } else if let Ok(tag) = text.parse::<StaticStrings>() {
+        } else if let Some(tag) = StaticStrings::from_text(text) {
             self.get_static_id(tag)
         } else {
             self.base.string_id_by_name.borrow().get(text).copied()

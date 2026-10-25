@@ -25,7 +25,6 @@ use std::{
     collections::BTreeMap,
     mem,
     slice::from_ref,
-    str::FromStr,
     sync::{Arc, LazyLock},
 };
 
@@ -2570,6 +2569,33 @@ pub enum StaticStrings {
     ZipLongest,
 }
 
+/// Reverse lookup from text to its [`StaticStrings`] tag.
+///
+/// strum's derived `FromStr` is a linear chain of string comparisons over every
+/// variant, so its cost grows with each string added to the registry. Interning,
+/// compiling and loading a snapshot classify every string they see, so they use
+/// this table instead. Discriminants are contiguous from zero, so walking
+/// [`StaticStrings::from_repr`] until it returns `None` visits every variant.
+static STATIC_STRINGS_BY_TEXT: LazyLock<AHashMap<&'static str, StaticStrings>> = LazyLock::new(|| {
+    let mut map = AHashMap::new();
+    let mut index: u16 = 0;
+    while let Some(value) = StaticStrings::from_repr(index) {
+        map.entry(<&'static str>::from(value)).or_insert(value);
+        index += 1;
+    }
+    map
+});
+
+impl StaticStrings {
+    /// Returns the tag whose text is `text`, if this build recognizes it.
+    ///
+    /// Equivalent to `StaticStrings::from_str(text).ok()`, but a hash lookup.
+    #[inline]
+    pub fn from_text(text: &str) -> Option<Self> {
+        STATIC_STRINGS_BY_TEXT.get(text).copied()
+    }
+}
+
 /// One immutable interned string with directly accessible dispatch metadata.
 /// Snapshots store only text; loading reconstructs the tag and cached hash.
 #[derive(Debug, Clone)]
@@ -2640,9 +2666,9 @@ impl serde::Serialize for InternedString {
 impl<'de> serde::Deserialize<'de> for InternedString {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = <String as serde::Deserialize>::deserialize(deserializer)?;
-        Ok(match StaticStrings::from_str(&value) {
-            Ok(static_string) => Self::static_string(static_string),
-            Err(_) => Self::owned(value),
+        Ok(match StaticStrings::from_text(&value) {
+            Some(static_string) => Self::static_string(static_string),
+            None => Self::owned(value),
         })
     }
 }
@@ -2747,7 +2773,7 @@ fn get_string_id_by_name(
         Some(StringId::EMPTY)
     } else if s.len() == 1 {
         Some(StringId::from_ascii(s.as_bytes()[0]))
-    } else if let Ok(value) = StaticStrings::from_str(s) {
+    } else if let Some(value) = StaticStrings::from_text(s) {
         static_string_ids.borrow().get(&value).copied()
     } else {
         string_map.get(s).copied()
@@ -2997,5 +3023,29 @@ impl Interns {
     /// Finds canonical text already interned, excluding snippet filename IDs.
     pub fn get_string_id_by_name(&self, s: &str) -> Option<StringId> {
         get_string_id_by_name(&self.string_id_by_name.borrow(), &self.static_string_ids, s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use super::*;
+
+    /// The hash table must classify every variant's text exactly as strum's `FromStr` does.
+    #[test]
+    fn from_text_matches_from_str() {
+        let mut index: u16 = 0;
+        while let Some(value) = StaticStrings::from_repr(index) {
+            let text: &'static str = value.into();
+            assert_eq!(
+                StaticStrings::from_text(text),
+                StaticStrings::from_str(text).ok(),
+                "{text:?}"
+            );
+            index += 1;
+        }
+        assert_eq!(STATIC_STRINGS_BY_TEXT.len(), usize::from(index));
+        assert_eq!(StaticStrings::from_text("not_a_static_string"), None);
     }
 }

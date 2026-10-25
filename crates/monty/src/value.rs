@@ -1963,7 +1963,7 @@ impl EitherStr {
     pub fn static_string(&self, interns: &Interns) -> Option<StaticStrings> {
         match self {
             Self::Interned(id) => interns.static_string(*id),
-            Self::Heap(value) => StaticStrings::from_str(value).ok(),
+            Self::Heap(value) => StaticStrings::from_text(value),
         }
     }
 
