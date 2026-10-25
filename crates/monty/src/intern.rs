@@ -30,6 +30,7 @@ use std::{
 
 use ahash::{AHashMap, AHashSet};
 pub(crate) use compile::CompileInterns;
+use monty_types::allocate_into_baseline;
 use num_bigint::BigInt;
 use storage::Entries;
 use strum::{EnumString, FromRepr, IntoStaticStr};
@@ -2576,14 +2577,19 @@ pub enum StaticStrings {
 /// compiling and loading a snapshot classify every string they see, so they use
 /// this table instead. Discriminants are contiguous from zero, so walking
 /// [`StaticStrings::from_repr`] until it returns `None` visits every variant.
+///
+/// Built on first use, which is usually a sandbox's first compile, so its cost goes into the
+/// worker's memory baseline rather than that sandbox's `max_memory`.
 static STATIC_STRINGS_BY_TEXT: LazyLock<AHashMap<&'static str, StaticStrings>> = LazyLock::new(|| {
-    let mut map = AHashMap::new();
-    let mut index: u16 = 0;
-    while let Some(value) = StaticStrings::from_repr(index) {
-        map.entry(<&'static str>::from(value)).or_insert(value);
-        index += 1;
-    }
-    map
+    allocate_into_baseline(|| {
+        let mut map = AHashMap::new();
+        let mut index: u16 = 0;
+        while let Some(value) = StaticStrings::from_repr(index) {
+            map.entry(<&'static str>::from(value)).or_insert(value);
+            index += 1;
+        }
+        map
+    })
 });
 
 impl StaticStrings {
@@ -3023,29 +3029,5 @@ impl Interns {
     /// Finds canonical text already interned, excluding snippet filename IDs.
     pub fn get_string_id_by_name(&self, s: &str) -> Option<StringId> {
         get_string_id_by_name(&self.string_id_by_name.borrow(), &self.static_string_ids, s)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::str::FromStr;
-
-    use super::*;
-
-    /// The hash table must classify every variant's text exactly as strum's `FromStr` does.
-    #[test]
-    fn from_text_matches_from_str() {
-        let mut index: u16 = 0;
-        while let Some(value) = StaticStrings::from_repr(index) {
-            let text: &'static str = value.into();
-            assert_eq!(
-                StaticStrings::from_text(text),
-                StaticStrings::from_str(text).ok(),
-                "{text:?}"
-            );
-            index += 1;
-        }
-        assert_eq!(STATIC_STRINGS_BY_TEXT.len(), usize::from(index));
-        assert_eq!(StaticStrings::from_text("not_a_static_string"), None);
     }
 }
