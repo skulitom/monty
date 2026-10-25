@@ -2570,35 +2570,36 @@ pub enum StaticStrings {
     ZipLongest,
 }
 
-/// Reverse lookup from text to its [`StaticStrings`] tag.
+/// Every [`StaticStrings`] tag, sorted by its text, for [`StaticStrings::from_text`].
 ///
 /// strum's derived `FromStr` is a linear chain of string comparisons over every
 /// variant, so its cost grows with each string added to the registry. Interning,
-/// compiling and loading a snapshot classify every string they see, so they use
-/// this table instead. Discriminants are contiguous from zero, so walking
-/// [`StaticStrings::from_repr`] until it returns `None` visits every variant.
+/// compiling and loading a snapshot classify every string they see, so they binary
+/// search this table instead: about 2 KB, where a hash map of the same texts costs ~70 KB.
+/// Discriminants are contiguous from zero, so walking [`StaticStrings::from_repr`] until it
+/// returns `None` visits every variant; the stable sort keeps tags that share a text in
+/// declaration order, so the first match is the one `FromStr` returns.
 ///
 /// Built on first use, which is usually a sandbox's first compile, so its cost goes into the
 /// worker's memory baseline rather than that sandbox's `max_memory`.
-static STATIC_STRINGS_BY_TEXT: LazyLock<AHashMap<&'static str, StaticStrings>> = LazyLock::new(|| {
+static STATIC_STRINGS_BY_TEXT: LazyLock<Box<[StaticStrings]>> = LazyLock::new(|| {
     allocate_into_baseline(|| {
-        let mut map = AHashMap::new();
-        let mut index: u16 = 0;
-        while let Some(value) = StaticStrings::from_repr(index) {
-            map.entry(<&'static str>::from(value)).or_insert(value);
-            index += 1;
-        }
-        map
+        let mut tags: Vec<StaticStrings> = (0..=u16::MAX).map_while(StaticStrings::from_repr).collect();
+        tags.sort_by_key(|&tag| <&'static str>::from(tag));
+        tags.into_boxed_slice()
     })
 });
 
 impl StaticStrings {
     /// Returns the tag whose text is `text`, if this build recognizes it.
     ///
-    /// Equivalent to `StaticStrings::from_str(text).ok()`, but a hash lookup.
-    #[inline]
+    /// Equivalent to `StaticStrings::from_str(text).ok()`, but a binary search.
     pub fn from_text(text: &str) -> Option<Self> {
-        STATIC_STRINGS_BY_TEXT.get(text).copied()
+        let tags = &**STATIC_STRINGS_BY_TEXT;
+        let index = tags.partition_point(|&tag| <&'static str>::from(tag) < text);
+        tags.get(index)
+            .copied()
+            .filter(|&tag| <&'static str>::from(tag) == text)
     }
 }
 
